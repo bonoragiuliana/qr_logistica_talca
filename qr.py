@@ -1,100 +1,144 @@
 import mysql.connector
 import qrcode
-from PIL import Image
 import tkinter as tk
 from tkinter import ttk, messagebox
 import os
 import tempfile
+from reportlab.platypus import SimpleDocTemplate, Image as RLImage, Spacer
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
 
 # ---------- CONEXIÓN A BASE DE DATOS ----------
 conexion = mysql.connector.connect(
     host="localhost",
     user="root",
     password="talca2025",
-    database="productos_db",
-    #auth_plugin="mysql_native_password"
+    database="productos_db"
 )
 cursor = conexion.cursor()
 
-
-# ---------- FUNCIONES PRINCIPALES ----------
+# ---------- FUNCIONES ----------
 
 def obtener_productos():
     cursor.execute("SELECT id_producto, descripcion FROM productos")
     return cursor.fetchall()
 
-def generar_y_imprimir_qrs(id_producto, descripcion, cantidad):
-    cursor.execute("SELECT ultimo_nro_serie FROM productos WHERE id_producto = %s", (id_producto,))
-    resultado = cursor.fetchone()
-    if not resultado:
-        messagebox.showerror("Error", "Producto no encontrado.")
-        return
 
-    nro_serie = resultado[0]
+def generar_pdf_e_imprimir(id_producto, descripcion, cantidad):
+    cursor.execute(
+        "SELECT ultimo_nro_serie FROM productos WHERE id_producto = %s",
+        (id_producto,)
+    )
+    ultimo = cursor.fetchone()[0]
+
+    pdf_path = os.path.join(
+        tempfile.gettempdir(),
+        f"QR_{id_producto}.pdf"
+    )
+
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4)
+    elementos = []
+
+    nro_serie = ultimo
+
     for _ in range(cantidad):
         nro_serie += 1
-        contenido = f"N° de Serie: {nro_serie}\nCódigo: {id_producto}\nDescripción: {descripcion}"
-        qr_img = qrcode.make(contenido)
 
-        # Guardar temporal
-        qr_path = os.path.join(tempfile.gettempdir(), f"qr_{id_producto}_{nro_serie}.png")
-        qr_img.save(qr_path)
+        texto_qr = (
+            f"N° de Serie: {nro_serie}\n"
+            f"Código: {id_producto}\n"
+            f"Descripción: {descripcion}"
+        )
 
-        # Imprimir (solo en Windows)
-        if os.name == 'nt':
-            os.startfile(qr_path, "print")
+        # Crear QR
+        qr_img = qrcode.make(texto_qr)
+        qr_temp = os.path.join(
+            tempfile.gettempdir(),
+            f"qr_{id_producto}_{nro_serie}.png"
+        )
+        qr_img.save(qr_temp)
 
-    # Actualizar número de serie
-    cursor.execute("UPDATE productos SET ultimo_nro_serie = %s WHERE id_producto = %s", (nro_serie, id_producto))
+        # QR superior
+        elementos.append(RLImage(qr_temp, width=6*cm, height=6*cm))
+        elementos.append(Spacer(1, 6*cm))
+
+        # QR inferior (idéntico)
+        elementos.append(RLImage(qr_temp, width=6*cm, height=6*cm))
+        elementos.append(Spacer(1, 1*cm))
+
+    # Construir PDF
+    doc.build(elementos)
+
+    # Actualizar serie en BD
+    cursor.execute(
+        "UPDATE productos SET ultimo_nro_serie = %s WHERE id_producto = %s",
+        (nro_serie, id_producto)
+    )
     conexion.commit()
 
-    messagebox.showinfo("¡Listo!", f"Se imprimieron {cantidad} QR(s) para:\n{descripcion}")
+    # Imprimir TODO el PDF junto
+    if os.name == "nt":
+        os.startfile(pdf_path, "print")
 
-# ---------- INTERFAZ GRÁFICA ----------
+    messagebox.showinfo(
+        "Impresión completa",
+        f"Se imprimieron {cantidad} hojas\nProducto: {descripcion}"
+    )
+
+# ---------- INTERFAZ ----------
 
 root = tk.Tk()
-root.title("Generador de QR para Logística - Talca")
-root.geometry("500x300")
+root.title("Generador de QR – Logística Talca")
+root.geometry("520x320")
 
-# Etiqueta
-ttk.Label(root, text="Seleccioná un producto:", font=("Arial", 12)).pack(pady=10)
+ttk.Label(root, text="Producto", font=("Arial", 12)).pack(pady=8)
 
-# Desplegable
 productos = obtener_productos()
-producto_dict = {f"{desc} (ID: {pid})": (pid, desc) for pid, desc in productos}
-combo = ttk.Combobox(root, values=list(producto_dict.keys()), state="readonly", width=60)
+producto_dict = {
+    f"{desc} (ID: {pid})": (pid, desc)
+    for pid, desc in productos
+}
+
+combo = ttk.Combobox(
+    root,
+    values=list(producto_dict.keys()),
+    state="readonly",
+    width=65
+)
 combo.pack()
 
-# Campo de cantidad
-ttk.Label(root, text="Cantidad de QR a imprimir:", font=("Arial", 12)).pack(pady=10)
-cantidad_entry = ttk.Entry(root)
+ttk.Label(root, text="Cantidad de QR", font=("Arial", 12)).pack(pady=10)
+cantidad_entry = ttk.Entry(root, width=10)
 cantidad_entry.pack()
 
-# Botón
-def al_hacer_click():
-    seleccion = combo.get()
-    if not seleccion:
-        messagebox.showwarning("Aviso", "Por favor seleccioná un producto.")
+def imprimir():
+    if not combo.get():
+        messagebox.showwarning("Error", "Seleccioná un producto")
         return
+
     try:
         cantidad = int(cantidad_entry.get())
         if cantidad <= 0:
             raise ValueError
     except ValueError:
-        messagebox.showwarning("Aviso", "Ingresá una cantidad válida.")
+        messagebox.showwarning("Error", "Cantidad inválida")
         return
 
-    id_producto, descripcion = producto_dict[seleccion]
-    generar_y_imprimir_qrs(id_producto, descripcion, cantidad)
+    id_producto, descripcion = producto_dict[combo.get()]
+    generar_pdf_e_imprimir(id_producto, descripcion, cantidad)
 
-ttk.Button(root, text="Imprimir QR", command=al_hacer_click).pack(pady=20)
+ttk.Button(
+    root,
+    text="IMPRIMIR",
+    command=imprimir,
+    width=20
+).pack(pady=25)
 
-# Ejecutar
 root.mainloop()
 
-# Cierre de conexión
 cursor.close()
 conexion.close()
+
 
 
 
