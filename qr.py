@@ -11,13 +11,17 @@ import os
 from datetime import datetime
 import win32api
 import win32print
+from dotenv import load_dotenv
+import os
+# ---------- CONEXIÓN A BASE DE DATOS
 
-# ---------- CONEXIÓN A BASE DE DATOS ----------
+load_dotenv()
+
 conexion = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    password="talca2025",
-    database="productos_db"
+    host= os.getenv('MYSQL_HOST'),
+    user= os.getenv('MYSQL_USER'),
+    password= os.getenv('MYSQL_DATABASE'),
+    database= os.getenv('MYSQL_PASSWORD')
 )
 cursor = conexion.cursor()
 
